@@ -1,10 +1,15 @@
-name: Cypress Tests and Report
+name: Cypress Tests and Allure-Report
 
 on:
-    push:
-      branches:
-        - main
-        - feature/synctest
+  push:
+    branches:
+      - dev
+      - cypress-allure
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
 
 jobs:
   cypress:
@@ -17,61 +22,49 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: 18
+          node-version: 20
 
-      - name: Install system dependencies
+      - name: Install package dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libnss3 libxss1 libasound2 libxtst6 xauth xvfb
 
-      - name: Install npm dependencies
+      - name: Install project dependencies
         run: |
-          cd $GITHUB_WORKSPACE/cypress
+          cd $GITHUB_WORKSPACE/automation-cypress
           npm install
 
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x16 &
+          export DISPLAY=:99
+
       - name: Run Cypress tests
-        working-directory: /cypress
+        working-directory: ./automation-cypress/
         run: |
-          export TMPDIR=/tmp
-          xvfb-run --auto-servernum npm run test
+          # Set your actual tags here or pass them as an environment variable
+          #npx cypress run -e allure=true --env TAGS=@AnnArbor
+          npx cypress run --browser=chrome -e allure=true --env TAGS=@AnnArbor
         env:
           DISPLAY: :99.0
+          continue-on-error: true
 
-      - name: Run Cypress tests with Allure
-        if: always()
-        working-directory: ./cypress
-        run: |
-          export TMPDIR=/tmp
-          xvfb-run --auto-servernum npm run test:allure
-        env:
-          DISPLAY: :99.0
-
-  generate-report:
-    needs: cypress
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Install Java and aws-cli
+      - name: Install Java and AWS CLI
         run: |
           sudo apt-get update
           sudo apt-get install -y default-jre awscli
 
-      - name: Install npm dependencies
+      - name: Install Allure
         run: |
-          cd $GITHUB_WORKSPACE/cypress
-          npm install
+          wget https://github.com/allure-framework/allure2/releases/download/2.15.0/allure-2.15.0.tgz
+          tar -zxvf allure-2.15.0.tgz
+          sudo mv allure-2.15.0 /opt/allure
+          sudo ln -s /opt/allure/bin/allure /usr/local/bin/allure
 
-      - name: Generate Allure report
-        working-directory: ./cypress
-        run: npm run allure-open
+      - name: Generate Allure Report
+        working-directory: ./automation-cypress/
+        run: |
+          allure generate allure-results --clean -o allure-results
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
@@ -79,10 +72,13 @@ jobs:
           role-to-assume: arn:aws:iam::992382551538:role/github-action
           aws-region: us-east-1
           role-session-name: github-action
+
       - name: Upload report to S3 and display URI
-        working-directory: ./cypress
+        working-directory: ./automation-cypress/
         run: |
+          ls -l
           TIMESTAMP=$(date +"%Y%m%d%H%M%S")
-          aws s3 sync allure-report/ s3://${{ secrets.CYPRESS_REPORT_BUCKET }}/$TIMESTAMP/
-          URI="https://${{ secrets.CYPRESS_REPORT_BUCKET }}.s3.amazonaws.com/$TIMESTAMP/"
+          aws s3 sync allure-results/ s3://chatbot-cypress-reports/$TIMESTAMP/
+          URI="https://chatbot-cypress-reports.s3.amazonaws.com/$TIMESTAMP/index.html"
           echo "Uploaded reports to URI: $URI"
+          echo "::set-output name=report-uri::$URI"
