@@ -1,0 +1,88 @@
+name: Cypress Tests and Report
+
+on:
+    push:
+      branches:
+        - main
+        - feature/synctest
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk2.0-0 libgtk-3-0 libgbm-dev libnotify-dev libnss3 libxss1 libasound2 libxtst6 xauth xvfb
+
+      - name: Install npm dependencies
+        run: |
+          cd $GITHUB_WORKSPACE/cypress
+          npm install
+
+      - name: Run Cypress tests
+        working-directory: /cypress
+        run: |
+          export TMPDIR=/tmp
+          xvfb-run --auto-servernum npm run test
+        env:
+          DISPLAY: :99.0
+
+      - name: Run Cypress tests with Allure
+        if: always()
+        working-directory: ./cypress
+        run: |
+          export TMPDIR=/tmp
+          xvfb-run --auto-servernum npm run test:allure
+        env:
+          DISPLAY: :99.0
+
+  generate-report:
+    needs: cypress
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install Java and aws-cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-jre awscli
+
+      - name: Install npm dependencies
+        run: |
+          cd $GITHUB_WORKSPACE/cypress
+          npm install
+
+      - name: Generate Allure report
+        working-directory: ./cypress
+        run: npm run allure-open
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::992382551538:role/github-action
+          aws-region: us-east-1
+          role-session-name: github-action
+      - name: Upload report to S3 and display URI
+        working-directory: ./cypress
+        run: |
+          TIMESTAMP=$(date +"%Y%m%d%H%M%S")
+          aws s3 sync allure-report/ s3://${{ secrets.CYPRESS_REPORT_BUCKET }}/$TIMESTAMP/
+          URI="https://${{ secrets.CYPRESS_REPORT_BUCKET }}.s3.amazonaws.com/$TIMESTAMP/"
+          echo "Uploaded reports to URI: $URI"
